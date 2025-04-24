@@ -1,168 +1,122 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import '../models/user_model.dart';
 import '../services/api_service.dart';
+import '../models/user_model.dart';
+import 'dart:developer' as developer;
 
 class AuthProvider with ChangeNotifier {
   final ApiService _apiService = ApiService();
-
+  
   User? _user;
   bool _isLoading = false;
   String? _errorMessage;
 
+  // Getters
   User? get user => _user;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  bool get isLoggedIn => _user != null;
-  bool get isStudent => _user?.isStudent ?? false;
-  bool get isTeacher => _user?.isTeacher ?? false;
+  bool get isAuthenticated => _user != null;
 
-  // Constructor that checks for existing login
-  AuthProvider() {
-    _checkCurrentAuth();
-  }
+  get isTeacher => null;
 
-  // Automatically check if user is already logged in
-  Future<void> _checkCurrentAuth() async {
-    _isLoading = true;
-    notifyListeners();
+  get userData => null;
 
+  Future<bool> checkAuthStatus() async {
     try {
-      final isLoggedIn = await _apiService.isLoggedIn();
-
-      if (isLoggedIn) {
-        _user = await _apiService.getCurrentUser();
+      _isLoading = true;
+      notifyListeners();
+      
+      developer.log('Checking auth status', name: 'AuthProvider');
+      
+      // Get the response from API service
+      final response = await _apiService.getCurrentUser();
+      
+      if (response['success'] == true) {
+        // Extract user data and convert to User object
+        final userData = response['user'];
+        _user = User.fromJson(userData);
+        _errorMessage = null;
+        
+        developer.log('User authenticated: ${_user!.name}', name: 'AuthProvider');
+        
+        _isLoading = false;
+        notifyListeners();
+        return true;
+      } else {
+        _user = null;
+        _errorMessage = response['message'];
+        
+        developer.log('Auth check failed: $_errorMessage', name: 'AuthProvider');
+        
+        _isLoading = false;
+        notifyListeners();
+        return false;
       }
     } catch (e) {
-      print('Error checking authentication: $e');
-    } finally {
+      developer.log('Error checking auth status: $e', name: 'AuthProvider', error: e);
       _isLoading = false;
+      _user = null;
+      _errorMessage = 'Authentication check failed';
       notifyListeners();
+      return false;
     }
   }
 
-  // Login
+  // Login user
   Future<bool> login(String email, String password) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
+      developer.log('Attempting login', name: 'AuthProvider');
       final result = await _apiService.login(email, password);
 
       if (result['success']) {
-        _user = result['user'];
+        // Convert user data to User object
+        _user = User.fromJson(result['user']);
         _errorMessage = null;
+        _isLoading = false;
         notifyListeners();
+        developer.log('Login successful', name: 'AuthProvider');
         return true;
       } else {
         _errorMessage = result['message'];
+        _isLoading = false;
         notifyListeners();
+        developer.log('Login failed: $_errorMessage', name: 'AuthProvider');
         return false;
       }
     } catch (e) {
-      _errorMessage = 'Terjadi kesalahan. Silakan coba lagi nanti.';
-      print('Login error in provider: $e');
-      notifyListeners();
-      return false;
-    } finally {
+      _errorMessage = 'Terjadi kesalahan saat login. Silakan coba lagi.';
       _isLoading = false;
       notifyListeners();
+      developer.log('Login error: $e', name: 'AuthProvider', error: e);
+      return false;
     }
   }
 
-  // Logout
-  Future<bool> logout() async {
+  // Logout user
+  Future<void> logout() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      final result = await _apiService.logout();
-
-      if (result) {
-        _user = null;
-        _errorMessage = null;
-        notifyListeners();
-        return true;
-      } else {
-        _errorMessage = 'Gagal logout. Coba lagi.';
-        notifyListeners();
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = 'Terjadi kesalahan. Silakan coba lagi nanti.';
-      print('Logout error: $e');
-      notifyListeners();
-      return false;
-    } finally {
+      developer.log('Attempting logout', name: 'AuthProvider');
+      await _apiService.logout();
+      
+      _user = null;
       _isLoading = false;
       notifyListeners();
+      developer.log('Logout successful', name: 'AuthProvider');
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      developer.log('Logout error: $e', name: 'AuthProvider', error: e);
     }
   }
 
-  // Update user profile
-  Future<bool> updateProfile(Map<String, dynamic> data) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    if (_user == null) {
-      _errorMessage = 'Anda harus login terlebih dahulu.';
-      notifyListeners();
-      return false;
-    }
-
-    final result = _user!.isStudent
-        ? await _apiService.updateStudentProfile(_user!.id, data)
-        : await _apiService.updateTeacherProfile(_user!.id, data);
-
-    if (result['success']) {
-      _user = _user!.isStudent ? result['student'] : result['teacher'];
-      notifyListeners();
-      return true;
-    }
-
-    _errorMessage = result['message'];
-    notifyListeners();
-    return false;
-  }
-
-  // Upload profile photo
-  Future<bool> uploadProfilePhoto(File photo) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    if (_user == null) {
-      _errorMessage = 'Anda harus login terlebih dahulu.';
-      notifyListeners();
-      return false;
-    }
-
-    final result = _user!.isStudent
-        ? await _apiService.uploadStudentProfilePhoto(_user!.id, photo)
-        : await _apiService.uploadTeacherProfilePhoto(_user!.id, photo);
-
-    if (result['success']) {
-      // Update the user's profile photo URL
-      _user = _user!.copyWith(profilePhotoUrl: result['profile_photo_url']);
-      notifyListeners();
-      return true;
-    }
-
-    _errorMessage = result['message'];
-    notifyListeners();
-    return false;
-  }
-
-  // Reset error message
-  void resetError() {
-    _errorMessage = null;
-    notifyListeners();
-  }
-
-  // Update user info
-  void updateUserInfo(User updatedUser) {
+  // Update user profile locally
+  void updateUserProfile(User updatedUser) {
     _user = updatedUser;
     notifyListeners();
   }

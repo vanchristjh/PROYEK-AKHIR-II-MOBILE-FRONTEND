@@ -65,7 +65,18 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+    case WM_DPICHANGED:
+      OnDpiChanged(hwnd, static_cast<UINT>(HIWORD(wparam)),
+                  reinterpret_cast<RECT*>(lparam));
+      break;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::OnDpiChanged(HWND window_handle, UINT dpi, RECT* rect) {
+  if (flutter_controller_) {
+    flutter_controller_->engine()->NotifyDisplayMetricsChanged();
+  }
+  SetBounds(rect);
 }

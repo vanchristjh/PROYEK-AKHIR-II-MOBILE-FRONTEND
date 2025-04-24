@@ -1,362 +1,237 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/user_model.dart';
+import 'dart:developer' as developer;
+import '../utils/debug_tools.dart';
+import 'package:dio/dio.dart';
 
 class ApiService {
-  final Dio _dio = Dio();
-  final String _baseUrl =
-      'http://10.0.2.2:8000/api'; // Android emulator localhost
-  // Use 'http://localhost:8000/api' for iOS simulator or web
-  // Use your actual server IP for physical devices
+  final String baseUrl = "http://10.0.2.2:8000/api";
+  late Dio _dio;
 
   ApiService() {
-    _dio.options.headers['Accept'] = 'application/json';
-    _dio.options.headers['Content-Type'] = 'application/json';
-    _initializeToken(); // Initialize token from storage on start
+    _dio = Dio(BaseOptions(
+      baseUrl: 'http://10.0.2.2:8000/api', // Use this for Android emulator
+      // baseUrl: 'http://127.0.0.1:8000/api', // Use this for iOS simulator or web
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 10),
+    ));
+    
+    // Add debug interceptor
+    _dio.interceptors.add(DebugInterceptor());
   }
-
-  // Initialize token from storage if available
-  Future<void> _initializeToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token');
-
-    if (token != null) {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
+  
+  // Method untuk login
+  Future<Map<String, dynamic>> login(String email, String password) async {
+    developer.log('Login attempt', name: 'ApiService', error: null);
+    try {
+      developer.log('API URL: $baseUrl/login', name: 'ApiService');
+      
+      // Gunakan Dio untuk konsistensi dan fitur yang lebih baik
+      final response = await _dio.post('/login',
+        data: {
+          'email': email,
+          'password': password,
+          'device_name': 'flutter_app'
+        },
+      );
+      
+      developer.log('Login response status: ${response.statusCode}', name: 'ApiService');
+      developer.log('Login response data: ${response.data}', name: 'ApiService');
+      
+      // Periksa berbagai format response yang mungkin
+      Map<String, dynamic> data;
+      if (response.data is Map<String, dynamic>) {
+        data = response.data;
+      } else if (response.data is String) {
+        data = jsonDecode(response.data);
+      } else {
+        throw Exception('Unexpected response format: ${response.data.runtimeType}');
+      }
+      
+      // Handle berbagai format success indicator
+      bool isSuccess = false;
+      if (data.containsKey('success')) {
+        isSuccess = data['success'] == true;
+      } else if (response.statusCode == 200) {
+        isSuccess = true;
+      }
+      
+      // Handle berbagai format token
+      String? token;
+      if (data.containsKey('token')) {
+        token = data['token'];
+      } else if (data.containsKey('access_token')) {
+        token = data['access_token'];
+      } else if (data.containsKey('data') && data['data'] is Map && data['data'].containsKey('token')) {
+        token = data['data']['token'];
+      }
+      
+      if (isSuccess && token != null) {
+        // Simpan token untuk penggunaan selanjutnya
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_token', token);
+        developer.log('Token saved successfully', name: 'ApiService');
+        
+        // Handle berbagai format user data
+        Map<String, dynamic>? userData;
+        if (data.containsKey('user')) {
+          userData = data['user'];
+        } else if (data.containsKey('data') && data['data'] is Map && data['data'].containsKey('user')) {
+          userData = data['data']['user'];
+        }
+        
+        return {
+          'success': true,
+          'user': userData ?? {'name': 'User', 'email': email}, // Fallback jika user data tidak ada
+          'message': data['message'] ?? 'Login berhasil'
+        };
+      } else {
+        developer.log('Login failed: ${data['message'] ?? "Unknown error"}', name: 'ApiService');
+        return {
+          'success': false,
+          'message': data['message'] ?? 'Login gagal. Pastikan email dan password benar.'
+        };
+      }
+    } catch (e, stackTrace) {
+      developer.log('Login error: $e', name: 'ApiService', error: e);
+      developer.log('Stack trace: $stackTrace', name: 'ApiService');
+      
+      // Menampilkan pesan error yang lebih spesifik
+      String errorMessage = 'Terjadi kesalahan saat login.';
+      
+      if (e is DioException) {
+        if (e.type == DioExceptionType.connectionTimeout) {
+          errorMessage = 'Koneksi timeout. Periksa koneksi internet Anda.';
+        } else if (e.type == DioExceptionType.receiveTimeout) {
+          errorMessage = 'Server lambat merespon. Coba lagi nanti.';
+        } else if (e.type == DioExceptionType.connectionError) {
+          errorMessage = 'Gagal terhubung ke server. Periksa koneksi internet Anda.';
+        } else if (e.response != null) {
+          if (e.response!.statusCode == 401) {
+            errorMessage = 'Email atau password salah.';
+          } else if (e.response!.statusCode == 422) {
+            errorMessage = 'Data yang dimasukkan tidak valid.';
+          } else if (e.response!.statusCode == 500) {
+            errorMessage = 'Terjadi kesalahan pada server. Coba lagi nanti.';
+          }
+          
+          // Tampilkan data response jika ada
+          if (e.response!.data != null) {
+            developer.log('Response data on error: ${e.response!.data}', name: 'ApiService');
+          }
+        }
+      } else if (e is FormatException) {
+        errorMessage = 'Format data dari server tidak sesuai. Coba lagi nanti.';
+      }
+      
+      return {
+        'success': false,
+        'message': errorMessage
+      };
     }
   }
-
-  // Set the auth token for subsequent requests
-  Future<void> setAuthToken(String token) async {
-    _dio.options.headers['Authorization'] = 'Bearer $token';
-
-    // Save token to SharedPreferences
+  
+  // Simpan token ke shared preferences
+  Future<void> saveToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('auth_token', token);
   }
-
-  // Remove the auth token (for logout)
-  Future<void> removeAuthToken() async {
-    _dio.options.headers.remove('Authorization');
-
-    // Remove token from SharedPreferences
+  
+  // Ambil token dari shared preferences
+  Future<String?> getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('auth_token');
+  }
+  
+  // Hapus token (logout)
+  Future<void> removeToken() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
   }
 
-  // Check if user is already logged in
-  Future<bool> isLoggedIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token');
-
-    if (token == null) return false;
-
-    // Set the token for subsequent requests
-    _dio.options.headers['Authorization'] = 'Bearer $token';
-
+  // Implement the logout method
+  Future<Map<String, dynamic>> logout() async {
     try {
-      // Verify the token by making a request to get user info
-      final response = await _dio.get('$_baseUrl/auth-test');
-      return response.statusCode == 200;
-    } catch (e) {
-      print('Auth check error: $e');
-      // Token is invalid or expired
-      await removeAuthToken();
-      return false;
-    }
-  }
+      String? token = await getToken();
+      if (token == null) {
+        return {'success': true, 'message': 'Already logged out'};
+      }
 
-  // Login and get auth token
-  Future<Map<String, dynamic>> login(String email, String password) async {
-    try {
-      final response = await _dio.post(
-        '$_baseUrl/login',
-        data: {
-          'email': email,
-          'password': password,
-          'device_name': 'Flutter Mobile App',
+      final response = await http.post(
+        Uri.parse('$baseUrl/logout'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
         },
       );
 
-      if (response.statusCode == 200) {
-        final data = response.data;
-        final token = data['token'];
+      // Regardless of response, remove token from shared preferences
+      await removeToken();
+      
+      return {
+        'success': true,
+        'message': 'Logout berhasil'
+      };
+    } catch (e) {
+      developer.log('Logout error: $e', name: 'ApiService', error: e);
+      // Still remove token even if there's an error
+      await removeToken();
+      return {
+        'success': true,
+        'message': 'Logout berhasil'
+      };
+    }
+  }
 
-        // Set token for subsequent requests
-        await setAuthToken(token);
-
-        return {
-          'success': true,
-          'user': User.fromJson(data['user']),
-          'message': data['message'],
-        };
+  // Implement getCurrentUser method
+  Future<Map<String, dynamic>> getCurrentUser() async {
+    try {
+      String? token = await getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'No authentication token'};
       }
 
-      return {
-        'success': false,
-        'message': 'Login gagal. Coba lagi.',
-      };
-    } on DioException catch (e) {
-      print('Login error: $e');
-      print('Response data: ${e.response?.data}');
+      final response = await http.get(
+        Uri.parse('$baseUrl/user'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
 
-      if (e.response?.statusCode == 422) {
-        // Validation error
-        final messages = e.response?.data['errors'] ??
-            {
-              'email': ['Email atau password salah.']
-            };
-        final firstError =
-            messages.values.first[0] ?? 'Email atau password salah.';
-
+      developer.log('Get current user response: ${response.body}', name: 'ApiService');
+      
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'user': jsonDecode(response.body),
+        };
+      } else {
         return {
           'success': false,
-          'message': firstError,
+          'message': 'Failed to get user data',
         };
       }
-
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
-
-  // Logout
-  Future<bool> logout() async {
-    try {
-      final response = await _dio.post('$_baseUrl/logout');
-
-      if (response.statusCode == 200) {
-        await removeAuthToken();
-        return true;
-      }
-
-      return false;
     } catch (e) {
-      print('Logout error: $e');
-      // Still remove token on error
-      await removeAuthToken();
-      return false;
-    }
-  }
-
-  // Get current user info
-  Future<User?> getCurrentUser() async {
-    try {
-      final response = await _dio.get('$_baseUrl/user');
-
-      if (response.statusCode == 200) {
-        return User.fromJson(response.data);
-      }
-
-      return null;
-    } catch (e) {
-      print('Get user error: $e');
-      return null;
-    }
-  }
-
-  // Get student data
-  Future<Map<String, dynamic>> getStudentData() async {
-    try {
-      final response = await _dio.get('$_baseUrl/students');
-
-      if (response.statusCode == 200) {
-        final data = response.data;
-
-        // Parse students list
-        final students = (data['students'] as List)
-            .map((json) => User.fromJson(json))
-            .toList();
-
-        return {
-          'success': true,
-          'students': students,
-          'count': data['count'],
-        };
-      }
-
+      developer.log('Get current user error: $e', name: 'ApiService', error: e);
       return {
         'success': false,
-        'message': 'Gagal mengambil data siswa.',
-      };
-    } catch (e) {
-      print('Get student data error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
+        'message': 'Error getting user data: $e',
       };
     }
   }
 
-  // Get teacher data
-  Future<Map<String, dynamic>> getTeacherData() async {
-    try {
-      final response = await _dio.get('$_baseUrl/teachers');
+  getAnnouncements() {}
 
-      if (response.statusCode == 200) {
-        final data = response.data;
+  getAttendanceRecords() {}
 
-        // Parse teachers list
-        final teachers = (data['teachers'] as List)
-            .map((json) => User.fromJson(json))
-            .toList();
+  updateProfile(int userId, Map<String, dynamic> data) {}
 
-        return {
-          'success': true,
-          'teachers': teachers,
-          'count': data['count'],
-        };
-      }
+  uploadProfilePhoto(File photo, int userId) {}
 
-      return {
-        'success': false,
-        'message': 'Gagal mengambil data guru.',
-      };
-    } catch (e) {
-      print('Get teacher data error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
+  getSchedules() {}
 
-  // Update student profile
-  Future<Map<String, dynamic>> updateStudentProfile(
-      int id, Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.put(
-        '$_baseUrl/students/$id',
-        data: data,
-      );
-
-      if (response.statusCode == 200) {
-        return {
-          'success': true,
-          'student': User.fromJson(response.data['student']),
-          'message': response.data['message'],
-        };
-      }
-
-      return {
-        'success': false,
-        'message': 'Gagal memperbarui profil.',
-      };
-    } catch (e) {
-      print('Update student profile error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
-
-  // Update teacher profile
-  Future<Map<String, dynamic>> updateTeacherProfile(
-      int id, Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.put(
-        '$_baseUrl/teachers/$id',
-        data: data,
-      );
-
-      if (response.statusCode == 200) {
-        return {
-          'success': true,
-          'teacher': User.fromJson(response.data['teacher']),
-          'message': response.data['message'],
-        };
-      }
-
-      return {
-        'success': false,
-        'message': 'Gagal memperbarui profil.',
-      };
-    } catch (e) {
-      print('Update teacher profile error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
-
-  // Upload student profile photo
-  Future<Map<String, dynamic>> uploadStudentProfilePhoto(
-      int id, File photo) async {
-    try {
-      final formData = FormData.fromMap({
-        'id': id,
-        'profile_photo': await MultipartFile.fromFile(
-          photo.path,
-          filename: 'profile_photo.jpg',
-        ),
-      });
-
-      final response = await _dio.post(
-        '$_baseUrl/students/profile-photo',
-        data: formData,
-      );
-
-      if (response.statusCode == 200) {
-        return {
-          'success': true,
-          'profile_photo_url': response.data['profile_photo_url'],
-          'message': response.data['message'],
-        };
-      }
-
-      return {
-        'success': false,
-        'message': 'Gagal mengunggah foto profil.',
-      };
-    } catch (e) {
-      print('Upload student photo error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
-
-  // Upload teacher profile photo
-  Future<Map<String, dynamic>> uploadTeacherProfilePhoto(
-      int id, File photo) async {
-    try {
-      final formData = FormData.fromMap({
-        'id': id,
-        'profile_photo': await MultipartFile.fromFile(
-          photo.path,
-          filename: 'profile_photo.jpg',
-        ),
-      });
-
-      final response = await _dio.post(
-        '$_baseUrl/teachers/profile-photo',
-        data: formData,
-      );
-
-      if (response.statusCode == 200) {
-        return {
-          'success': true,
-          'profile_photo_url': response.data['profile_photo_url'],
-          'message': response.data['message'],
-        };
-      }
-
-      return {
-        'success': false,
-        'message': 'Gagal mengunggah foto profil.',
-      };
-    } catch (e) {
-      print('Upload teacher photo error: $e');
-      return {
-        'success': false,
-        'message': 'Terjadi kesalahan. Coba lagi nanti.',
-      };
-    }
-  }
+  getTodaySchedule() {}
 }

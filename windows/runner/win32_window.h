@@ -49,6 +49,9 @@ class Win32Window {
   // window properties. Returns nullptr if the window has been destroyed.
   HWND GetHandle();
 
+  // Sets the window bounds.
+  void SetBounds(RECT* bounds);
+
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
 

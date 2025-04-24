@@ -21,6 +21,9 @@ class FlutterWindow : public Win32Window {
   void OnDestroy() override;
   LRESULT MessageHandler(HWND window, UINT const message, WPARAM const wparam,
                          LPARAM const lparam) noexcept override;
+  
+  // Handle DPI changes
+  void OnDpiChanged(HWND window, UINT dpi, RECT* rect);
 
  private:
   // The project to run.
